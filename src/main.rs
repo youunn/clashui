@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -10,7 +10,7 @@ use std::{
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem, ListState},
@@ -24,10 +24,13 @@ struct StatefulList<T> {
 
 impl<T> StatefulList<T> {
     fn with_items(items: Vec<T>) -> StatefulList<T> {
-        StatefulList {
-            state: ListState::default(),
-            items,
+        let mut state = ListState::default();
+
+        if !items.is_empty() {
+            state.select(Some(0));
         }
+
+        StatefulList { state, items }
     }
 
     fn next(&mut self) {
@@ -57,10 +60,6 @@ impl<T> StatefulList<T> {
         };
         self.state.select(Some(i));
     }
-
-    fn unselect(&mut self) {
-        self.state.select(None);
-    }
 }
 
 struct App<'a> {
@@ -84,7 +83,7 @@ impl<'a> App<'a> {
 fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -93,11 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let res = run_app(&mut terminal, app, tick_rate);
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     if let Err(err) = res {
@@ -114,7 +109,7 @@ fn run_app<B: Backend>(
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        terminal.draw(|f| render(f, &mut app))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
@@ -125,7 +120,6 @@ fn run_app<B: Backend>(
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Char('j') => app.menu.next(),
                     KeyCode::Char('k') => app.menu.previous(),
-                    KeyCode::Esc => app.menu.unselect(),
                     _ => {}
                 }
             }
@@ -136,19 +130,23 @@ fn run_app<B: Backend>(
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
+fn render<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
         .split(f.size());
-    render_menu(f, app, chunks[0]);
-    render_main(f, chunks[1]);
+
+    let items = &app.menu.items;
+    let state = &mut app.menu.state;
+    let menu = draw_menu(items);
+    f.render_stateful_widget(menu, chunks[0], state);
+
+    let block = draw_main();
+    f.render_widget(block, chunks[1]);
 }
 
-fn render_menu<B: Backend>(f: &mut Frame<B>, app: &mut App, div: Rect) {
-    let items: Vec<ListItem> = app
-        .menu
-        .items
+fn draw_menu<'a>(items: &'a [&'a str]) -> List<'a> {
+    let items: Vec<ListItem> = items
         .iter()
         .map(|title| {
             ListItem::new(Spans::from(Span::styled(
@@ -159,18 +157,17 @@ fn render_menu<B: Backend>(f: &mut Frame<B>, app: &mut App, div: Rect) {
         })
         .collect();
 
-    let items = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("List"))
+    let menu = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Clash"))
         .highlight_style(
             Style::default()
                 .bg(Color::LightBlue)
                 .add_modifier(Modifier::BOLD),
         );
 
-    f.render_stateful_widget(items, div, &mut app.menu.state);
+    menu
 }
 
-fn render_main<B: Backend>(f: &mut Frame<B>, div: Rect) {
-    let block = Block::default().borders(Borders::ALL).title("Title");
-    f.render_widget(block, div);
+fn draw_main<'a>() -> Block<'a> {
+    Block::default().borders(Borders::ALL)
 }
