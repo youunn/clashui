@@ -25,6 +25,9 @@
             cargo
             clippy
             rustfmt
+
+	    pkg-config
+	    openssl
           ];
 
           RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
