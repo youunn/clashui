@@ -1,3 +1,4 @@
+use clap::Parser;
 use crossterm::{
 	event,
 	event::{Event, KeyCode},
@@ -24,6 +25,12 @@ use tui::{
 	widgets::{Block, Borders, List, ListItem, Tabs},
 	Frame, Terminal,
 };
+
+#[derive(Parser)]
+struct Cli {
+	base_url: Option<String>,
+	// TODO: token: Option<String>,
+}
 
 #[derive(PartialEq, Debug)]
 enum Route {
@@ -58,10 +65,10 @@ struct HttpClient {
 }
 
 impl HttpClient {
-	fn new() -> Self {
+	fn new(base_url: &str) -> Self {
 		Self {
 			client: Client::new(),
-			url: String::from("http://localhost:9090"),
+			url: base_url.to_owned(),
 		}
 	}
 
@@ -336,8 +343,8 @@ struct App {
 	proxies_state: ProxiesState,
 }
 
-impl Default for App {
-	fn default() -> Self {
+impl App {
+	fn new(base_url: &str) -> Self {
 		let routes = vec![
 			Route::General,
 			Route::Proxies,
@@ -347,7 +354,7 @@ impl Default for App {
 		];
 
 		Self {
-			http: HttpClient::new(),
+			http: HttpClient::new(base_url),
 			routes,
 			page: 0,
 			focus: Pane::Menu,
@@ -355,9 +362,7 @@ impl Default for App {
 			proxies_state: ProxiesState::default(),
 		}
 	}
-}
 
-impl App {
 	fn navigate(&mut self, page: usize) {
 		self.page = page % self.routes.len();
 		self.fetch_data();
@@ -400,7 +405,10 @@ impl App {
 
 fn main() -> Result<(), Box<dyn Error>> {
 	// TODO: log
-	// TODO: process arguments
+
+	let cli = Cli::parse();
+	let base_url =
+		cli.base_url.as_deref().unwrap_or("http://localhost:9090");
 
 	enable_raw_mode()?;
 	let mut stdout = io::stdout();
@@ -409,7 +417,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	let mut terminal = Terminal::new(backend)?;
 
 	let tick_rate = Duration::from_secs(1);
-	let app = App::default();
+	let app = App::new(base_url);
 	let res = run_app(&mut terminal, app, tick_rate);
 
 	disable_raw_mode()?;
