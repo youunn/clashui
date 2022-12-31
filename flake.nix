@@ -17,6 +17,14 @@
       in rec {
         defaultPackage = naersk'.buildPackage {
           src = ./.;
+
+          nativeBuildInputs = with pkgs; [
+	    pkg-config
+          ];
+
+          buildInputs = with pkgs; [
+	    openssl
+          ];
         };
 
         devShell = pkgs.mkShell {
@@ -27,6 +35,9 @@
             rustfmt
 
 	    pkg-config
+          ];
+
+          buildInputs = with pkgs; [
 	    openssl
           ];
 
