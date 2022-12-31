@@ -44,6 +44,7 @@ impl fmt::Display for Route {
 enum Pane {
 	Menu,
 	Proxies,
+	General,
 	// Other,
 }
 
@@ -62,6 +63,25 @@ impl HttpClient {
 			client: Client::new(),
 			url: String::from("http://localhost:9090"),
 		}
+	}
+
+	fn configs(&self) -> Result<Config, Box<dyn Error>> {
+		let res: Config = self
+			.client
+			.get(format!("{}{}", self.url, "/configs"))
+			.send()?
+			.json()?;
+		Ok(res)
+	}
+
+	fn update_config(&self, mode: &str) -> Result<(), Box<dyn Error>> {
+		let body = HashMap::from([("mode", mode)]);
+		self.client
+			.patch(format!("{}{}", self.url, "/configs",))
+			.json(&body)
+			.send()?
+			.json()?;
+		Ok(())
 	}
 
 	// fn providers(&self) -> Result<HashMap<String, Proxy>, Box<dyn Error>> {
@@ -99,6 +119,52 @@ impl HttpClient {
 			.send()?
 			.json()?;
 		Ok(())
+	}
+}
+
+#[derive(Deserialize)]
+struct Config {
+	// TODO: enum "global, rule, direct"
+	mode: String,
+}
+
+#[derive(Default)]
+struct GeneralState {
+	modes: Vec<String>,
+	index: usize,
+	config: Option<Config>,
+}
+
+impl GeneralState {
+	fn new() -> Self {
+		Self {
+			modes: vec![
+				String::from("global"),
+				String::from("rule"),
+				String::from("direct"),
+			],
+			index: 0,
+			config: None,
+		}
+	}
+
+	fn fetch_data(&mut self, http: &HttpClient) {
+		self.config = http.configs().ok();
+	}
+
+	fn next_mode(&mut self) {
+		let len = 3;
+		self.index = (self.index + 1) % len;
+	}
+
+	fn previous_mode(&mut self) {
+		let len = 3;
+		self.index = (self.index + len - 1) % len;
+	}
+
+	fn select_mode(&mut self, http: &HttpClient) {
+		http.update_config(&self.modes[self.index]).ok();
+		self.fetch_data(http);
 	}
 }
 
@@ -234,10 +300,8 @@ impl ProxiesState {
 		let proxy_index = self.proxy_index;
 		let name = match &provider.all {
 			Some(proxies) => {
-				let mut proxies: Vec<_> = proxies
-					.iter()
-					.map(|s| &**s)
-					.collect();
+				let mut proxies: Vec<_> =
+					proxies.iter().map(|s| &**s).collect();
 				proxies.sort();
 
 				match proxies.get(proxy_index) {
@@ -268,6 +332,7 @@ struct App {
 	routes: Vec<Route>,
 	page: usize,
 	focus: Pane,
+	general_state: GeneralState,
 	proxies_state: ProxiesState,
 }
 
@@ -286,6 +351,7 @@ impl Default for App {
 			routes,
 			page: 0,
 			focus: Pane::Menu,
+			general_state: GeneralState::new(),
 			proxies_state: ProxiesState::default(),
 		}
 	}
@@ -315,7 +381,9 @@ impl App {
 			_ => return,
 		};
 		match route {
-			Route::General => {}
+			Route::General => {
+				self.general_state.fetch_data(&self.http)
+			}
 			Route::Proxies => {
 				self.proxies_state.fetch_data(&self.http)
 			}
@@ -400,17 +468,37 @@ fn process_key(code: KeyCode, app: &mut App) -> ProcessResult {
 		Pane::Menu => match code {
 			KeyCode::Char('j') => app.next_menu(),
 			KeyCode::Char('k') => app.previous_menu(),
-			KeyCode::Char('l') => {
-				if app.route() == Some(&Route::Proxies) {
+			KeyCode::Char('l') => match app.route() {
+				Some(&Route::Proxies) => {
 					app.focus = Pane::Proxies;
-					app.fetch_data();
+					app.fetch_data()
 				}
-			}
+				Some(&Route::General) => {
+					app.focus = Pane::General;
+					app.fetch_data()
+				}
+				_ => {}
+			},
 			KeyCode::Char('1') => app.navigate(0),
 			KeyCode::Char('2') => app.navigate(1),
 			KeyCode::Char('3') => app.navigate(2),
 			KeyCode::Char('4') => app.navigate(3),
 			KeyCode::Char('5') => app.navigate(4),
+			_ => {}
+		},
+		Pane::General => match code {
+			KeyCode::Esc | KeyCode::Char('h') => {
+				app.focus = Pane::Menu;
+			}
+			KeyCode::Char(' ') => {
+				app.general_state.select_mode(&app.http);
+			}
+			KeyCode::Char('j') => {
+				app.general_state.next_mode();
+			}
+			KeyCode::Char('k') => {
+				app.general_state.previous_mode();
+			}
 			_ => {}
 		},
 		Pane::Proxies => match code {
@@ -463,9 +551,10 @@ fn render<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 	f.render_widget(menu, chunks[0]);
 
 	let route = &app.routes.get(app.page).unwrap_or(&Route::General);
+	let general_state = &mut app.general_state;
 	let proxies_state = &mut app.proxies_state;
 	let focus = &app.focus;
-	render_main(f, route, proxies_state, focus, chunks[1]);
+	render_main(f, route, general_state, proxies_state, focus, chunks[1]);
 }
 
 fn draw_menu(items: &[Route], page: usize) -> List<'_> {
@@ -500,21 +589,52 @@ fn draw_menu(items: &[Route], page: usize) -> List<'_> {
 fn render_main<'a, B: Backend>(
 	f: &'a mut Frame<B>,
 	route: &'a Route,
-	state: &mut ProxiesState,
+	general_state: &mut GeneralState,
+	proxies_state: &mut ProxiesState,
 	focus: &'a Pane,
 	rect: Rect,
 ) {
 	match route {
-		Route::General => f.render_widget(draw_general(), rect),
-		Route::Proxies => render_proxies(f, state, focus, rect),
+		Route::General => render_general(f, general_state, focus, rect),
+		Route::Proxies => render_proxies(f, proxies_state, focus, rect),
 		Route::Rules => f.render_widget(draw_rules(), rect),
 		Route::Connections => f.render_widget(draw_connections(), rect),
 		Route::Logs => f.render_widget(draw_logs(), rect),
 	}
 }
 
-fn draw_general<'a>() -> Block<'a> {
-	Block::default().borders(Borders::ALL).title("General")
+fn render_general<'a, B: Backend>(
+	f: &'a mut Frame<B>,
+	state: &mut GeneralState,
+	focus: &'a Pane,
+	rect: Rect,
+) {
+	let items: Vec<_> = state
+		.modes
+		.iter()
+		.map(|name| {
+			let mut style = Style::default();
+			let mode = state.config.as_ref().map(|c| &c.mode);
+			if Some(name) == mode {
+				style = style
+					.fg(Color::LightRed)
+					.add_modifier(Modifier::BOLD);
+			}
+			if name == &state.modes[state.index]
+				&& focus == &Pane::General
+			{
+				style = style.bg(Color::LightBlue);
+			}
+
+			let spans = Spans::from(name.as_ref());
+
+			ListItem::new(spans).style(style)
+		})
+		.collect();
+
+	let block = Block::default().borders(Borders::ALL).title("General");
+	let list = List::new(items).block(block);
+	f.render_widget(list, rect);
 }
 
 fn render_proxies<'a, B: Backend>(
@@ -580,7 +700,7 @@ fn render_proxies<'a, B: Backend>(
 					.fg(Color::LightRed)
 					.add_modifier(Modifier::BOLD);
 			}
-			if i == 0 {
+			if i == 0 && focus == &Pane::Proxies {
 				style = style.bg(Color::LightBlue);
 			}
 			ListItem::new(Spans::from(t)).style(style)
